@@ -152,6 +152,44 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 
 ---
 
+## ONNX models (Issue #3)
+
+Artifacts are tracked in Postgres (`model_artifacts`) and stored on disk under `MODEL_ARTIFACTS_BASE_DIR` (default `artifacts/models`).
+
+### `GET /models/{name}/latest`
+
+Returns metadata for the row where `is_latest` is true for `name` (URL-safe: letters, digits, `_`, `.`, `-`).
+
+**404** if nothing published.
+
+### `GET /models/{name}/latest/file`
+
+Returns the `.onnx` bytes as `application/octet-stream`, `Content-Disposition: attachment`, and **`ETag: "<sha256>"`** (Starlette `FileResponse` / sendfile; suitable for large files without loading the whole model into memory).
+
+**304 Not Modified** if request header `If-None-Match` matches the artifact SHA256 (case-insensitive).
+
+**401** when `MODELS_DOWNLOAD_KEY` is set and `X-Model-Download-Key` is missing or wrong.
+
+### `POST /models/{name}/publish`
+
+**404** when `MODELS_ADMIN_KEY` is unset (publishing disabled). Otherwise requires header **`X-Models-Admin-Key`** matching `MODELS_ADMIN_KEY`.
+
+Multipart form fields: `version` (string), `file` (binary). Promotes the upload as the sole latest row for `name` in one transaction (other versions for that name get `is_latest=false`). Max upload **50 MiB**.
+
+**201** returns the same JSON shape as `GET .../latest`.
+
+**409** on duplicate `(name, version)` or other integrity violations.
+
+### Retrain / redeploy workflow
+
+1. `python scripts/export_road_decay_onnx.py --output-dir artifacts/models`
+2. `alembic upgrade head` (if schema changed)
+3. `python scripts/publish_model.py road_decay_model --version <new> --file artifacts/models/road_decay_model.onnx`  
+   or `POST /models/road_decay_model/publish` with admin key.
+4. Gateways call `GET /models/road_decay_model/latest`, compare `sha256`, then conditionally `GET .../latest/file` and verify the file hash matches metadata.
+
+---
+
 ## Idempotency
 
 `sync_logs` has a unique constraint on `(gateway_id, batch_id)`. Retrying the **same** batch returns **200** with `idempotent_replay: true` and the **stored** `record_count` / `applied_count` / `sync_log_status` without re-applying reports.

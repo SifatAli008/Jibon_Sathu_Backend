@@ -7,7 +7,7 @@ Zone A (cloud) FastAPI service: Postgres schema, health check, and `POST /sync/p
 1. Start Postgres: `docker compose up -d` (published on host **`127.0.0.1:5433`** — see `docker-compose.yml`).
 2. `python -m venv .venv` then activate and `pip install -e ".[dev]"`
 3. Copy `.env.example` to `.env` and adjust if needed. If you already have a `.env`, set **`DATABASE_URL`** to use port **5433** and user/password **`jibon`/`jibon`** unless you changed them in Compose.
-4. `alembic upgrade head`
+4. `alembic upgrade head` (re-run after pulling new migrations, e.g. `model_artifacts` for ONNX — Issue #3).
 5. `uvicorn app.main:app --reload`
 
 ### Still seeing `password authentication failed for user "jibon"`?
@@ -32,3 +32,24 @@ pytest
 ```
 
 API tests use `httpx.AsyncClient` (async) so the same event loop owns asyncpg for the whole test. For local verification of merge behavior, set `REPORTS_DEV_KEY` and call `GET /reports` with header `X-Dev-Reports-Key` (see `API_SPEC.md`).
+
+## ONNX model distribution (Issue #3)
+
+**Export** (requires `pip install -e ".[dev]"` for sklearn / skl2onnx / onnx):
+
+```bash
+python scripts/export_road_decay_onnx.py --output-dir artifacts/models
+```
+
+The script prints `sha256`, `suggested_version`, and `size_bytes`.
+
+**Publish** (writes under `MODEL_ARTIFACTS_BASE_DIR`, default `artifacts/models`, and updates Postgres):
+
+1. Apply migrations: `alembic upgrade head`
+2. `python scripts/publish_model.py road_decay_model --version <version-from-export> --file artifacts/models/road_decay_model.onnx`
+
+**HTTP API** (see `API_SPEC.md`): `GET /models/{name}/latest` (metadata), `GET /models/{name}/latest/file` (binary via `FileResponse`, `ETag` = SHA256 for conditional GET).
+
+**Optional auth:** set `MODELS_DOWNLOAD_KEY` to require header `X-Model-Download-Key` on **file** download only. Set `MODELS_ADMIN_KEY` and use header `X-Models-Admin-Key` on **`POST /models/{name}/publish`** (multipart: `version`, `file`) for in-band publishing without the CLI.
+
+**Ops:** The API process does not cache file contents; new publishes are visible immediately. Back up `MODEL_ARTIFACTS_BASE_DIR` and the database together when promoting releases.

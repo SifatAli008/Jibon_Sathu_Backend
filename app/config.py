@@ -18,6 +18,15 @@ class Settings(BaseSettings):
     reports_dev_key: str | None = None
     """If set, `GET /reports` is enabled when `X-Dev-Reports-Key` matches (Issue #4 handoff)."""
 
+    model_artifacts_base_dir: str = "artifacts/models"
+    """Root directory for stored `.onnx` files (relative to cwd or absolute)."""
+
+    models_download_key: str | None = None
+    """If set, `GET /models/.../latest/file` requires matching `X-Model-Download-Key`."""
+
+    models_admin_key: str | None = None
+    """If set, `POST /models/.../publish` requires matching `X-Models-Admin-Key`."""
+
 
 @lru_cache
 def get_settings() -> Settings:
