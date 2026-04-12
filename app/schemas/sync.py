@@ -67,6 +67,8 @@ class LatestModelVersionMeta(BaseModel):
     version: str
     sha256: str
     size_bytes: int
+    min_gateway_version: str
+    input_schema_hash: str | None = None
 
 
 class SyncPullResponse(BaseModel):

@@ -1,8 +1,12 @@
-# Cloud API contract (Issues #1–#8)
+# Cloud API contract (Issues #1–#10)
 
 Base URL: deployment-specific. Local default: `http://127.0.0.1:8000`.
 
 All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), preferably UTC with `Z` suffix.
+
+## API versioning (Issue #10)
+
+All **sync** and **model** HTTP routes live under **`/v1/`** (frozen contract for delay-tolerant gateways). Requests to legacy unversioned paths (for example `POST /sync/push`) return **404 Not Found**. **`GET /health`** and dev-only **`GET /reports`** remain at the **root** (no `/v1` prefix).
 
 ---
 
@@ -52,7 +56,7 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 
 ---
 
-## `POST /sync/push`
+## `POST /v1/sync/push`
 
 **Purpose:** Batch ingest with **Issue #2 merge policy** inside one database transaction: idempotent batches, deterministic road/supply merge, append-only SOS, strict validation.
 
@@ -171,12 +175,12 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 | `400 Bad Request` | `gateway_id` / `batch_id` disagree with headers. |
 | `413 Payload Too Large` | Batch exceeds `MAX_SYNC_BATCH_ITEMS` (default **500**). |
 | `422 Unprocessable Entity` | Pydantic validation, strict batch validation (clock skew, kind/id conflict), etc. |
-| `429 Too Many Requests` | Rate limit exceeded on `/sync/*` (Issue #8). Includes `Retry-After` (seconds). |
+| `429 Too Many Requests` | Rate limit exceeded on `/v1/sync/*` (Issue #8). Includes `Retry-After` (seconds). |
 | `500 Internal Server Error` | Unexpected persistence or server faults (not part of the stable contract). |
 
 ---
 
-## `GET /sync/pull` (Issue #6)
+## `GET /v1/sync/pull` (Issue #6)
 
 **Purpose:** Downward sync for Gateways to catch up after offline periods.
 
@@ -219,7 +223,9 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
     "name": "road_decay_model",
     "version": "2026.04.12-1",
     "sha256": "…",
-    "size_bytes": 1234
+    "size_bytes": 1234,
+    "min_gateway_version": "1.0.0",
+    "input_schema_hash": null
   }
 }
 ```
@@ -228,7 +234,7 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 
 ---
 
-## `GET /sync/conflicts` (Issue #8)
+## `GET /v1/sync/conflicts` (Issue #8)
 
 **Purpose:** Auditability for merge decisions (noop tombstone blocks, LWW losers, etc.).
 
@@ -251,19 +257,23 @@ Returns `sync_logs` rows including `merge_audit` JSON (when present) describing 
 
 ---
 
-## ONNX models (Issue #3)
+## ONNX models (Issues #3, #9)
 
 Artifacts are tracked in Postgres (`model_artifacts`) and stored on disk under `MODEL_ARTIFACTS_BASE_DIR` (default `artifacts/models`).
 
-### `GET /models/{name}/latest`
+**Issue #9 compatibility:** Each artifact records **`min_gateway_version`** (required semver string for Zone B app builds) and optional **`input_schema_hash`** (stable fingerprint of ONNX input / feature contract). Gateways should refuse downloads when their app version is lower than `min_gateway_version`.
+
+### `GET /v1/models/{name}/latest`
 
 Returns metadata for the row where `is_latest` is true for `name` (URL-safe: letters, digits, `_`, `.`, `-`).
+
+JSON fields include: `name`, `version`, `sha256`, `size_bytes`, `updated_at`, **`min_gateway_version`**, **`input_schema_hash`** (nullable).
 
 When `REQUIRE_GATEWAY_AUTH=true`, requires **`X-Gateway-Id`** and **`Authorization: Bearer <secret>`** (Issue #7).
 
 **404** if nothing published.
 
-### `GET /models/{name}/latest/file`
+### `GET /v1/models/{name}/latest/file`
 
 Returns the `.onnx` bytes as `application/octet-stream`, `Content-Disposition: attachment`, and **`ETag: "<sha256>"`** (Starlette `FileResponse` / sendfile; suitable for large files without loading the whole model into memory).
 
@@ -271,11 +281,20 @@ Returns the `.onnx` bytes as `application/octet-stream`, `Content-Disposition: a
 
 **401** when `MODELS_DOWNLOAD_KEY` is set and `X-Model-Download-Key` is missing or wrong, or when gateway auth is enabled and gateway headers/token are invalid.
 
-### `POST /models/{name}/publish`
+### `POST /v1/models/{name}/publish`
 
 **404** when `MODELS_ADMIN_KEY` is unset (publishing disabled). Otherwise requires header **`X-Models-Admin-Key`** matching `MODELS_ADMIN_KEY`.
 
-Multipart form fields: `version` (string), `file` (binary). Promotes the upload as the sole latest row for `name` in one transaction (other versions for that name get `is_latest=false`). Max upload **50 MiB**.
+Multipart form fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `version` | yes | Model version string. |
+| `min_gateway_version` | yes | Minimum Zone B gateway **app** version (semver). Omitting it yields **422**. |
+| `input_schema_hash` | no | Optional stable hash of input schema / ONNX IO contract. |
+| `file` | yes | Binary `.onnx` payload. |
+
+Promotes the upload as the sole latest row for `name` in one transaction (other versions for that name get `is_latest=false`). Max upload **50 MiB**.
 
 **201** returns the same JSON shape as `GET .../latest`.
 
@@ -283,20 +302,28 @@ Multipart form fields: `version` (string), `file` (binary). Promotes the upload 
 
 ### Retrain / redeploy workflow
 
-1. `python scripts/export_road_decay_onnx.py --output-dir artifacts/models`
+1. `python scripts/export_road_decay_onnx.py --output-dir artifacts/models` (JSON includes suggested `min_gateway_version`, e.g. `1.0.0`).
 2. `alembic upgrade head` (if schema changed)
-3. `python scripts/publish_model.py road_decay_model --version <new> --file artifacts/models/road_decay_model.onnx`  
-   or `POST /models/road_decay_model/publish` with admin key.
-4. Gateways call `GET /models/road_decay_model/latest`, compare `sha256`, then conditionally `GET .../latest/file` and verify the file hash matches metadata.
+3. `python scripts/publish_model.py road_decay_model --version <new> --min-gateway-version 1.0.0 --file artifacts/models/road_decay_model.onnx`  
+   or `POST /v1/models/road_decay_model/publish` with admin key and form fields above.
+4. Gateways call `GET /v1/models/road_decay_model/latest`, compare `sha256` and **`min_gateway_version`** against the local app, then conditionally `GET .../latest/file` and verify the file hash matches metadata.
+
+### Tests (ML metadata)
+
+With Postgres running and migrations applied:
+
+```bash
+pytest tests/test_models_onnx.py -q
+```
 
 ---
 
 ## Idempotency
 
-`sync_logs` has a unique constraint on `(gateway_id, batch_id)`. Retrying the **same** batch returns **200** with `idempotent_replay: true` and the **stored** `record_count` / `applied_count` / `sync_log_status` without re-applying reports.
+`sync_logs` has a unique constraint on `(gateway_id, batch_id)`. Retrying the **same** batch to **`POST /v1/sync/push`** returns **200** with `idempotent_replay: true` and the **stored** `record_count` / `applied_count` / `sync_log_status` without re-applying reports.
 
 ---
 
-## Versioning
+## Contract pinning
 
-Push lives under `/sync`. Global API version header or URL prefix may be introduced later; Zone B clients should pin to this document revision in their repository.
+Zone B gateways should pin to **`/v1/`** paths and this document revision. Future incompatible changes should ship under `/v2/` (not yet defined) while keeping `/v1/` stable for offline nodes.

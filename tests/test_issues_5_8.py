@@ -69,7 +69,7 @@ async def test_push_delete_creates_tombstone(ac: AsyncClient, monkeypatch: pytes
 
         assert (
             await ac.post(
-                "/sync/push",
+                "/v1/sync/push",
                 json={
                     "gateway_id": str(gid),
                     "batch_id": str(bid),
@@ -92,7 +92,7 @@ async def test_push_delete_creates_tombstone(ac: AsyncClient, monkeypatch: pytes
         bid2 = uuid.uuid4()
         assert (
             await ac.post(
-                "/sync/push",
+                "/v1/sync/push",
                 json={
                     "gateway_id": str(gid),
                     "batch_id": str(bid2),
@@ -116,7 +116,7 @@ async def test_push_delete_creates_tombstone(ac: AsyncClient, monkeypatch: pytes
         lr = await ac.get("/reports", headers={"X-Dev-Reports-Key": "dev-test-key"})
         row = next(x for x in lr.json() if x.get("segment_key") == seg)
         # Dev endpoint may not expose is_tombstone; validate via pull instead:
-        pr = await ac.get("/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": 0})
+        pr = await ac.get("/v1/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": 0})
         assert pr.status_code == 200
         items = pr.json()["items"]
         hit = next(x for x in items if x.get("segment_key") == seg)
@@ -140,7 +140,7 @@ async def test_stale_live_push_after_tombstone_is_noop(ac: AsyncClient) -> None:
     rid = uuid.uuid4()
     assert (
         await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid),
                 "batch_id": str(b1),
@@ -163,7 +163,7 @@ async def test_stale_live_push_after_tombstone_is_noop(ac: AsyncClient) -> None:
     b2 = uuid.uuid4()
     assert (
         await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid),
                 "batch_id": str(b2),
@@ -186,7 +186,7 @@ async def test_stale_live_push_after_tombstone_is_noop(ac: AsyncClient) -> None:
 
     b3 = uuid.uuid4()
     r3 = await ac.post(
-        "/sync/push",
+        "/v1/sync/push",
         json={
             "gateway_id": str(gid),
             "batch_id": str(b3),
@@ -219,7 +219,7 @@ async def test_pull_delta_respects_since_sequence_id(ac: AsyncClient) -> None:
     rid = uuid.uuid4()
     assert (
         await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid),
                 "batch_id": str(b),
@@ -239,14 +239,14 @@ async def test_pull_delta_respects_since_sequence_id(ac: AsyncClient) -> None:
         )
     ).status_code == 200
 
-    r0 = await ac.get("/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": 0})
+    r0 = await ac.get("/v1/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": 0})
     assert r0.status_code == 200
     j0 = r0.json()
     assert j0["has_more"] is False
     assert j0["max_sequence_id"] > 0
     mx = j0["max_sequence_id"]
 
-    r1 = await ac.get("/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": mx})
+    r1 = await ac.get("/v1/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": mx})
     assert r1.status_code == 200
     assert r1.json()["items"] == []
 
@@ -261,7 +261,7 @@ async def test_sequence_monotonic_across_concurrent_pushes(ac: AsyncClient) -> N
         bid = uuid.uuid4()
         t = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         r = await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid),
                 "batch_id": str(bid),
@@ -317,7 +317,7 @@ async def test_push_payload_too_large_413(ac: AsyncClient, monkeypatch: pytest.M
             for i in range(3)
         ]
         r = await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={"gateway_id": str(gid), "batch_id": str(bid), "reports": items},
             headers={"X-Gateway-Id": str(gid), "X-Sync-Batch-Id": str(bid)},
         )
@@ -333,7 +333,7 @@ async def test_gateway_auth_missing_headers_401(ac: AsyncClient, monkeypatch: py
     monkeypatch.setenv("REQUIRE_GATEWAY_AUTH", "true")
     get_settings.cache_clear()
     try:
-        r = await ac.get("/sync/pull", headers={"X-Gateway-Id": str(uuid.uuid4())})
+        r = await ac.get("/v1/sync/pull", headers={"X-Gateway-Id": str(uuid.uuid4())})
         assert r.status_code == 401
     finally:
         monkeypatch.delenv("REQUIRE_GATEWAY_AUTH", raising=False)
@@ -360,7 +360,7 @@ async def test_gateway_auth_revoked_403(ac: AsyncClient, monkeypatch: pytest.Mon
             )
     try:
         r = await ac.get(
-            "/sync/pull",
+            "/v1/sync/pull",
             headers={"X-Gateway-Id": str(gid), "Authorization": f"Bearer {secret}"},
         )
         assert r.status_code == 403
@@ -392,7 +392,7 @@ async def test_gateway_auth_ok_200(ac: AsyncClient, monkeypatch: pytest.MonkeyPa
             )
     try:
         r = await ac.get(
-            "/sync/pull",
+            "/v1/sync/pull",
             headers={"X-Gateway-Id": str(gid), "Authorization": f"Bearer {secret}"},
         )
         assert r.status_code == 200
@@ -410,7 +410,7 @@ async def test_conflicts_admin_endpoint(ac: AsyncClient, monkeypatch: pytest.Mon
     monkeypatch.setenv("SYNC_ADMIN_KEY", "adm")
     get_settings.cache_clear()
     try:
-        r = await ac.get("/sync/conflicts", headers={"X-Sync-Admin-Key": "adm"})
+        r = await ac.get("/v1/sync/conflicts", headers={"X-Sync-Admin-Key": "adm"})
         assert r.status_code == 200
         assert "items" in r.json()
     finally:

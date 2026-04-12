@@ -1,6 +1,6 @@
 # Jibon Sathu Backend
 
-Zone A (cloud) FastAPI service: Postgres schema, health check, and `POST /sync/push`.
+Zone A (cloud) FastAPI service: Postgres schema, health check, and **`POST /v1/sync/push`** (frozen v1 contract).
 
 ## Quick start
 
@@ -29,6 +29,8 @@ With Postgres running and `DATABASE_URL` set (see `.env.example`):
 
 ```bash
 pytest
+# ONNX + compatibility metadata (Issue #9) — requires dev ML stack:
+pytest tests/test_models_onnx.py -q
 ```
 
 API tests use `httpx.AsyncClient` (async) so the same event loop owns asyncpg for the whole test. For local verification of merge behavior, set `REPORTS_DEV_KEY` and call `GET /reports` with header `X-Dev-Reports-Key` (see `API_SPEC.md`).
@@ -41,22 +43,23 @@ API tests use `httpx.AsyncClient` (async) so the same event loop owns asyncpg fo
 python scripts/export_road_decay_onnx.py --output-dir artifacts/models
 ```
 
-The script prints `sha256`, `suggested_version`, and `size_bytes`.
+The script prints `sha256`, `suggested_version`, `size_bytes`, and a mock **`min_gateway_version`** (e.g. `1.0.0`).
 
 **Publish** (writes under `MODEL_ARTIFACTS_BASE_DIR`, default `artifacts/models`, and updates Postgres):
 
 1. Apply migrations: `alembic upgrade head`
-2. `python scripts/publish_model.py road_decay_model --version <version-from-export> --file artifacts/models/road_decay_model.onnx`
+2. `python scripts/publish_model.py road_decay_model --version <version-from-export> --min-gateway-version 1.0.0 --file artifacts/models/road_decay_model.onnx`  
+   Optional: `--input-schema-hash <64-char-hex>` when the ONNX IO contract changes.
 
-**HTTP API** (see `API_SPEC.md`): `GET /models/{name}/latest` (metadata), `GET /models/{name}/latest/file` (binary via `FileResponse`, `ETag` = SHA256 for conditional GET).
+**HTTP API** (see `API_SPEC.md`): `GET /v1/models/{name}/latest` (metadata incl. `min_gateway_version`), `GET /v1/models/{name}/latest/file` (binary via `FileResponse`, `ETag` = SHA256 for conditional GET).
 
-**Optional auth:** set `MODELS_DOWNLOAD_KEY` to require header `X-Model-Download-Key` on **file** download only. Set `MODELS_ADMIN_KEY` and use header `X-Models-Admin-Key` on **`POST /models/{name}/publish`** (multipart: `version`, `file`) for in-band publishing without the CLI.
+**Optional auth:** set `MODELS_DOWNLOAD_KEY` to require header `X-Model-Download-Key` on **file** download only. Set `MODELS_ADMIN_KEY` and use header `X-Models-Admin-Key` on **`POST /v1/models/{name}/publish`** (multipart: `version`, **`min_gateway_version`**, optional `input_schema_hash`, `file`) for in-band publishing without the CLI.
 
 **Ops:** The API process does not cache file contents; new publishes are visible immediately. Back up `MODEL_ARTIFACTS_BASE_DIR` and the database together when promoting releases.
 
 ## Disaster-mode client backoff (Issues #5–#8)
 
-When many gateways reconnect at once, Zone A may respond with **429 Too Many Requests** on `/sync/*`. Clients should:
+When many gateways reconnect at once, Zone A may respond with **429 Too Many Requests** on `/v1/sync/*`. Clients should:
 
 - Honor **`Retry-After`** (seconds) when present.
 - Otherwise use exponential backoff with jitter (e.g., base 250ms, cap ~60s), and avoid tight loops that amplify congestion.

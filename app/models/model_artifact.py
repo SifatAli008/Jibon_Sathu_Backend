@@ -28,3 +28,5 @@ class ModelArtifact(Base):
     file_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
     is_latest: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    min_gateway_version: Mapped[str] = mapped_column(Text, nullable=False)
+    input_schema_hash: Mapped[str | None] = mapped_column(Text, nullable=True)

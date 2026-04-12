@@ -177,7 +177,7 @@ def main() -> None:
     p.add_argument(
         "--model-name",
         default=os.environ.get("GATEWAY_SIM_MODEL_NAME", "road_decay_model"),
-        help="Model artifact name for GET /models/{name}/...",
+        help="Model artifact name for GET /v1/models/{name}/...",
     )
     p.add_argument("--timeout", type=float, default=120.0, help="HTTP timeout seconds")
     p.add_argument(
@@ -200,7 +200,7 @@ def main() -> None:
         "--sleep-before-push-ms",
         type=int,
         default=0,
-        help="Sleep before POST /sync/push (simulate slow client / latency)",
+        help="Sleep before POST /v1/sync/push (simulate slow client / latency)",
     )
     p.add_argument(
         "--repeat-idempotent-push",
@@ -239,8 +239,8 @@ def main() -> None:
     with httpx.Client(base_url=base, timeout=args.timeout, verify=verify) as client:
         _sleep_ms(args.sleep_before_push_ms, log, batch_id, "before_push")
 
-        log.info("batch_id=%s POST /sync/push reports=%s", batch_id, len(reports))
-        r = client.post("/sync/push", json=body, headers=headers_push)
+        log.info("batch_id=%s POST /v1/sync/push reports=%s", batch_id, len(reports))
+        r = client.post("/v1/sync/push", json=body, headers=headers_push)
         if r.status_code != 200:
             log.error("batch_id=%s push failed status=%s body=%s", batch_id, r.status_code, r.text[:2000])
             raise SystemExit(1)
@@ -256,7 +256,7 @@ def main() -> None:
 
         if args.repeat_idempotent_push:
             log.info("batch_id=%s repeating identical POST (idempotency check)", batch_id)
-            r2 = client.post("/sync/push", json=body, headers=headers_push)
+            r2 = client.post("/v1/sync/push", json=body, headers=headers_push)
             if r2.status_code != 200:
                 log.error("batch_id=%s repeat push failed: %s", batch_id, r2.text[:500])
                 raise SystemExit(1)
@@ -289,7 +289,7 @@ def main() -> None:
 
         _sleep_ms(args.sleep_ms, log, batch_id, "before_model_meta")
 
-        meta_path = f"/models/{args.model_name}/latest"
+        meta_path = f"/v1/models/{args.model_name}/latest"
         log.info("batch_id=%s GET %s", batch_id, meta_path)
         mr = client.get(meta_path)
         if mr.status_code != 200:
@@ -312,7 +312,7 @@ def main() -> None:
         if args.download_key:
             dl_headers["X-Model-Download-Key"] = args.download_key
 
-        file_path = f"/models/{args.model_name}/latest/file"
+        file_path = f"/v1/models/{args.model_name}/latest/file"
         log.info("batch_id=%s GET %s -> temp file", batch_id, file_path)
         with tempfile.NamedTemporaryFile(suffix=".onnx", delete=False) as tf:
             out_path = Path(tf.name)

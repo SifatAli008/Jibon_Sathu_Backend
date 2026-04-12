@@ -43,12 +43,14 @@ def main() -> None:
         "sha256": out.sha256_hex,
         "suggested_version": out.suggested_version,
         "size_bytes": out.file_size_bytes,
+        "min_gateway_version": "1.0.0",
     }
     print(json.dumps(payload, indent=2))
     print(
         "\nNext: register as latest in Postgres (after migrations), e.g.\n"
         f"  python scripts/publish_model.py road_decay_model "
-        f"--version {out.suggested_version} --file {out.output_path}\n",
+        f"--version {out.suggested_version} --min-gateway-version 1.0.0 "
+        f"--file {out.output_path}\n",
         file=sys.stderr,
     )
 

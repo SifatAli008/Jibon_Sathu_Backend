@@ -62,7 +62,7 @@ async def test_push_minimal_batch(ac: AsyncClient) -> None:
         ],
     }
     r = await ac.post(
-        "/sync/push",
+        "/v1/sync/push",
         json=body,
         headers={"X-Gateway-Id": str(gid), "X-Sync-Batch-Id": str(bid)},
     )
@@ -73,7 +73,7 @@ async def test_push_minimal_batch(ac: AsyncClient) -> None:
     assert out["idempotent_replay"] is False
 
     r2 = await ac.post(
-        "/sync/push",
+        "/v1/sync/push",
         json=body,
         headers={"X-Gateway-Id": str(gid), "X-Sync-Batch-Id": str(bid)},
     )
@@ -94,7 +94,7 @@ async def test_push_header_body_mismatch(ac: AsyncClient) -> None:
         "reports": [],
     }
     r = await ac.post(
-        "/sync/push",
+        "/v1/sync/push",
         json=body,
         headers={"X-Gateway-Id": str(other), "X-Sync-Batch-Id": str(bid)},
     )
@@ -136,7 +136,7 @@ async def test_push_strict_clock_skew_fails_whole_batch(
         ],
     }
     r = await ac.post(
-        "/sync/push",
+        "/v1/sync/push",
         json=body,
         headers={"X-Gateway-Id": str(gid), "X-Sync-Batch-Id": str(bid)},
     )
@@ -159,7 +159,7 @@ async def test_segment_conflict_two_gateways_latest_wins(
         bid1 = uuid.uuid4()
         rid1 = uuid.uuid4()
         r1 = await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid1),
                 "batch_id": str(bid1),
@@ -183,7 +183,7 @@ async def test_segment_conflict_two_gateways_latest_wins(
         bid2 = uuid.uuid4()
         rid2 = uuid.uuid4()
         r2 = await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid2),
                 "batch_id": str(bid2),
@@ -227,7 +227,7 @@ async def test_sos_first_write_immutable(ac: AsyncClient, monkeypatch: pytest.Mo
         t = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         b1 = uuid.uuid4()
         r1 = await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid),
                 "batch_id": str(b1),
@@ -248,7 +248,7 @@ async def test_sos_first_write_immutable(ac: AsyncClient, monkeypatch: pytest.Mo
 
         b2 = uuid.uuid4()
         r2 = await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json={
                 "gateway_id": str(gid),
                 "batch_id": str(b2),
@@ -325,7 +325,7 @@ async def test_simulated_fault_rollbacks_entire_batch(
             ],
         }
         r = await ac.post(
-            "/sync/push",
+            "/v1/sync/push",
             json=body,
             headers={"X-Gateway-Id": str(gid), "X-Sync-Batch-Id": str(bid)},
         )
@@ -339,3 +339,10 @@ async def test_simulated_fault_rollbacks_entire_batch(
         merge_service.set_merge_fault_after_touches(None)
         monkeypatch.delenv("REPORTS_DEV_KEY", raising=False)
         get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_legacy_unversioned_sync_route_not_found(ac: AsyncClient) -> None:
+    """Issue #10: unversioned /sync/* must not match (contract frozen under /v1)."""
+    r = await ac.post("/sync/push", json={"gateway_id": str(uuid.uuid4()), "batch_id": str(uuid.uuid4()), "reports": []})
+    assert r.status_code == 404

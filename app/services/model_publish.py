@@ -20,6 +20,8 @@ async def publish_new_latest(
     name: str,
     version: str,
     data: bytes,
+    min_gateway_version: str,
+    input_schema_hash: str | None = None,
 ) -> ModelArtifact:
     """
     Writes bytes to `{base_dir}/{name}/{version}.onnx` and inserts the DB row as sole `is_latest` for `name`.
@@ -43,6 +45,8 @@ async def publish_new_latest(
         file_size_bytes=size,
         storage_path=rel,
         is_latest=True,
+        min_gateway_version=min_gateway_version,
+        input_schema_hash=input_schema_hash,
     )
     session.add(row)
     await session.flush()

@@ -70,6 +70,8 @@ async def get_model_latest(
         sha256=row.file_sha256,
         size_bytes=row.file_size_bytes,
         updated_at=row.created_at,
+        min_gateway_version=row.min_gateway_version,
+        input_schema_hash=row.input_schema_hash,
     )
 
 
@@ -128,7 +130,9 @@ async def download_model_latest(
 async def publish_model_version(
     name: str,
     version: Annotated[str, Form()],
+    min_gateway_version: Annotated[str, Form(min_length=1)],
     file: Annotated[UploadFile, File()],
+    input_schema_hash: Annotated[str | None, Form()] = None,
     x_models_admin_key: Annotated[str | None, Header(alias="X-Models-Admin-Key")] = None,
     session: AsyncSession = Depends(get_db),
 ) -> ModelLatestResponse:
@@ -146,7 +150,13 @@ async def publish_model_version(
     try:
         async with session.begin():
             row = await publish_new_latest(
-                session, base_dir=base, name=name, version=version, data=data
+                session,
+                base_dir=base,
+                name=name,
+                version=version,
+                data=data,
+                min_gateway_version=min_gateway_version,
+                input_schema_hash=input_schema_hash or None,
             )
     except IntegrityError as e:
         try:
@@ -164,4 +174,6 @@ async def publish_model_version(
         sha256=row.file_sha256,
         size_bytes=row.file_size_bytes,
         updated_at=row.created_at,
+        min_gateway_version=row.min_gateway_version,
+        input_schema_hash=row.input_schema_hash,
     )

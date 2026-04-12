@@ -1,4 +1,4 @@
-"""Downward sync (`GET /sync/pull`) — Issue #6."""
+"""Downward sync (`GET /v1/sync/pull`) — Issue #6."""
 
 from __future__ import annotations
 
@@ -58,6 +58,8 @@ async def build_sync_pull_response(
             version=latest_row.version,
             sha256=latest_row.file_sha256,
             size_bytes=latest_row.file_size_bytes,
+            min_gateway_version=latest_row.min_gateway_version,
+            input_schema_hash=latest_row.input_schema_hash,
         )
 
     return SyncPullResponse(
