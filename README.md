@@ -54,6 +54,16 @@ The script prints `sha256`, `suggested_version`, and `size_bytes`.
 
 **Ops:** The API process does not cache file contents; new publishes are visible immediately. Back up `MODEL_ARTIFACTS_BASE_DIR` and the database together when promoting releases.
 
+## Disaster-mode client backoff (Issues #5–#8)
+
+When many gateways reconnect at once, Zone A may respond with **429 Too Many Requests** on `/sync/*`. Clients should:
+
+- Honor **`Retry-After`** (seconds) when present.
+- Otherwise use exponential backoff with jitter (e.g., base 250ms, cap ~60s), and avoid tight loops that amplify congestion.
+- Treat **413 Payload Too Large** as a hard batching error: split work into smaller pushes (default server max is **500** reports per request).
+
+See `API_SPEC.md` for tombstone/pull semantics and `SECURITY_MODEL.md` for gateway provisioning.
+
 ## Gateway integration spike (Issue #4)
 
 End-to-end rehearsal (push overlapping reports → optional dev `GET /reports` → model metadata → download → SHA256 + onnxruntime):

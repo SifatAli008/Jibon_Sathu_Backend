@@ -1,4 +1,4 @@
-# Cloud API contract (Issues #1–#2)
+# Cloud API contract (Issues #1–#8)
 
 Base URL: deployment-specific. Local default: `http://127.0.0.1:8000`.
 
@@ -67,7 +67,11 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 
 **Strict batch (Issue #2):** If **any** report fails validation (clock skew, id/kind conflict, batch size), the **entire** batch fails with **422** and **nothing** from that request is committed (including `sync_logs`).
 
-**Batch size:** At most `MAX_SYNC_BATCH_ITEMS` reports per request (default **10000**).
+**Batch size:** At most `MAX_SYNC_BATCH_ITEMS` reports per request (default **500**). Oversized batches return **413**.
+
+**Issue #5 tombstones:** Deletes are represented as **CRDT tombstone rows** (`is_tombstone=true`, usually with `deleted_at`). The server **never hard-deletes** mergeable `road` / `supply` rows on push. Once a canonical row is tombstoned, **non-tombstone pushes cannot resurrect it**, even if their wall-clock `updated_at` is newer (prevents “zombie” replay from stale gateways).
+
+**Server ordering:** Each accepted row mutation receives a monotonic `server_sequence_id` allocated from a single Postgres sequence (`server_sequence_global`). This is the safe ordering signal for pull/merge; **do not rely on `updated_at` alone** across zones.
 
 ### Headers (required)
 
@@ -75,6 +79,7 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 |--------|------|-------------|
 | `X-Gateway-Id` | UUID | Must equal `gateway_id` in the JSON body. |
 | `X-Sync-Batch-Id` | UUID | Must equal `batch_id` in the JSON body. Client-generated idempotency key. |
+| `Authorization` | string | When `REQUIRE_GATEWAY_AUTH=true`: **`Authorization: Bearer <gateway-secret>`** (Issue #7). |
 
 ### Request body
 
@@ -117,6 +122,23 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 | `created_at` | yes | `timestamptz` |
 | `updated_at` | yes | `timestamptz` |
 | `deleted_at` | no | For `road` / `supply`, applied when the incoming row wins; ignored for SOS. |
+| `is_tombstone` | no | Explicit tombstone without `deleted_at` (optional). |
+
+**Tombstone JSON example**
+
+```json
+{
+  "id": "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+  "kind": "road",
+  "segment_key": "BD-DHK-12-450",
+  "status": "deleted",
+  "payload": {},
+  "created_at": "2026-04-12T10:00:00Z",
+  "updated_at": "2026-04-12T10:05:00Z",
+  "deleted_at": "2026-04-12T10:05:00Z",
+  "is_tombstone": true
+}
+```
 
 **Clock skew:** If **any** report has `created_at` or `updated_at` more than `MAX_FUTURE_SKEW_SECONDS` (default **300**) ahead of server UTC, the **whole batch** returns **422** (strict mode).
 
@@ -147,8 +169,85 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 | Code | When |
 |------|------|
 | `400 Bad Request` | `gateway_id` / `batch_id` disagree with headers. |
-| `422 Unprocessable Entity` | Pydantic validation, strict batch validation (clock skew, kind/id conflict, batch too large), etc. |
+| `413 Payload Too Large` | Batch exceeds `MAX_SYNC_BATCH_ITEMS` (default **500**). |
+| `422 Unprocessable Entity` | Pydantic validation, strict batch validation (clock skew, kind/id conflict), etc. |
+| `429 Too Many Requests` | Rate limit exceeded on `/sync/*` (Issue #8). Includes `Retry-After` (seconds). |
 | `500 Internal Server Error` | Unexpected persistence or server faults (not part of the stable contract). |
+
+---
+
+## `GET /sync/pull` (Issue #6)
+
+**Purpose:** Downward sync for Gateways to catch up after offline periods.
+
+### Query parameters
+
+| Param | Default | Description |
+|------|---------|-------------|
+| `since_sequence_id` | `0` | Return rows with `server_sequence_id` **greater than** this value (cursor). |
+| `limit` | `100` | Page size (1–500). |
+
+### Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Gateway-Id` | yes | Gateway identity (must match provisioned gateway when auth is enabled). |
+| `Authorization` | if enabled | `Bearer` token when `REQUIRE_GATEWAY_AUTH=true`. |
+
+### Response (200)
+
+```json
+{
+  "items": [
+    {
+      "id": "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+      "kind": "road",
+      "segment_key": "BD-DHK-12-450",
+      "status": "deleted",
+      "payload": {},
+      "created_at": "2026-04-12T10:00:00+00:00",
+      "updated_at": "2026-04-12T10:05:00+00:00",
+      "deleted_at": "2026-04-12T10:05:00+00:00",
+      "source_gateway_id": "550e8400-e29b-41d4-a716-446655440000",
+      "server_sequence_id": 42,
+      "is_tombstone": true
+    }
+  ],
+  "max_sequence_id": 42,
+  "has_more": false,
+  "latest_model_version": {
+    "name": "road_decay_model",
+    "version": "2026.04.12-1",
+    "sha256": "…",
+    "size_bytes": 1234
+  }
+}
+```
+
+**Pagination / cursor:** Gateways should store `max_sequence_id` from the last successful pull and pass `since_sequence_id=<that value>` on the next pull. If `has_more` is `true`, re-request with the updated cursor (same `since_sequence_id` until empty).
+
+---
+
+## `GET /sync/conflicts` (Issue #8)
+
+**Purpose:** Auditability for merge decisions (noop tombstone blocks, LWW losers, etc.).
+
+### Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Sync-Admin-Key` | yes (when enabled) | Must match `SYNC_ADMIN_KEY`. If unset, endpoint returns **404** (disabled). |
+
+### Query parameters
+
+| Param | Default | Description |
+|------|---------|-------------|
+| `since_id` | `0` | Return `sync_logs.id` rows greater than this value. |
+| `limit` | `50` | Page size (1–200). |
+
+### Response (200)
+
+Returns `sync_logs` rows including `merge_audit` JSON (when present) describing per-report outcomes for that batch.
 
 ---
 
@@ -160,6 +259,8 @@ Artifacts are tracked in Postgres (`model_artifacts`) and stored on disk under `
 
 Returns metadata for the row where `is_latest` is true for `name` (URL-safe: letters, digits, `_`, `.`, `-`).
 
+When `REQUIRE_GATEWAY_AUTH=true`, requires **`X-Gateway-Id`** and **`Authorization: Bearer <secret>`** (Issue #7).
+
 **404** if nothing published.
 
 ### `GET /models/{name}/latest/file`
@@ -168,7 +269,7 @@ Returns the `.onnx` bytes as `application/octet-stream`, `Content-Disposition: a
 
 **304 Not Modified** if request header `If-None-Match` matches the artifact SHA256 (case-insensitive).
 
-**401** when `MODELS_DOWNLOAD_KEY` is set and `X-Model-Download-Key` is missing or wrong.
+**401** when `MODELS_DOWNLOAD_KEY` is set and `X-Model-Download-Key` is missing or wrong, or when gateway auth is enabled and gateway headers/token are invalid.
 
 ### `POST /models/{name}/publish`
 

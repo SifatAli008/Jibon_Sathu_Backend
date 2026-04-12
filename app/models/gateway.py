@@ -19,6 +19,8 @@ class Gateway(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_secret_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     reports: Mapped[list["Report"]] = relationship(back_populates="gateway")
     sync_logs: Mapped[list["SyncLog"]] = relationship(back_populates="gateway")

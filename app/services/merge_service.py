@@ -1,10 +1,11 @@
 """
-Issue #2 merge orchestration: transactional batch apply with strict validation.
+Issue #2 merge orchestration + Issue #5 server_sequence_id / tombstones + Issue #8 audit payload.
 
 Invariants:
 - Whole batch commits or rolls back (SyncLog written only after all items succeed).
 - SOS rows are never UPDATEd or DELETEd on push (append-only / first-write wins on id).
 - `applied_count` counts DB rows inserted or updated, not raw report count.
+- Each successful insert/update assigns a fresh `server_sequence_id` from `server_sequence_global`.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ from app.services.merge_policy import (
     SosMergeAction,
     decide_road_like_merge,
     decide_sos_merge,
+    incoming_is_tombstone,
 )
+from app.services.server_sequence import next_server_sequence
 
 # Tests may set this to raise after N successful touches (insert/update) to assert rollback.
 _simulated_fault_after_touches: int | None = None
@@ -39,6 +42,10 @@ def set_merge_fault_after_touches(n: int | None) -> None:
 
 class BatchValidationError(ValueError):
     """Strict batch failure (HTTP 422): no partial apply, no success SyncLog."""
+
+
+class BatchPayloadTooLargeError(BatchValidationError):
+    """HTTP 413: batch exceeds configured maximum item count (Issue #8)."""
 
 
 class SimulatedMergeFault(RuntimeError):
@@ -73,17 +80,24 @@ def validate_batch_strict(reports: list[ReportItem], now: datetime, max_future: 
 
 
 def _snap_mutable(r: Report) -> dict[str, Any]:
-    return {"id": r.id, "updated_at": r.updated_at, "source_gateway_id": r.source_gateway_id}
+    return {
+        "id": r.id,
+        "updated_at": r.updated_at,
+        "source_gateway_id": r.source_gateway_id,
+        "is_tombstone": r.is_tombstone,
+        "server_sequence_id": r.server_sequence_id,
+    }
 
 
 async def _fetch_canonical_mutable(
     session: AsyncSession, kind: str, segment_key: str
 ) -> Report | None:
-    """Pick the current winning row for (kind, segment_key) using the same ordering as policy ties."""
+    """Pick the current winning row for (kind, segment_key) — prefer latest server_sequence_id."""
     stmt = (
         select(Report)
         .where(Report.kind == kind, Report.segment_key == segment_key)
         .order_by(
+            Report.server_sequence_id.desc(),
             Report.updated_at.desc(),
             cast(Report.source_gateway_id, String).desc().nulls_last(),
             cast(Report.id, String).desc(),
@@ -93,10 +107,29 @@ async def _fetch_canonical_mutable(
     return await session.scalar(stmt)
 
 
+def _append_merge_audit(
+    audit: list[dict[str, Any]],
+    *,
+    incoming: ReportItem,
+    reason: str,
+    extra: dict[str, Any] | None = None,
+) -> None:
+    row: dict[str, Any] = {
+        "report_id": str(incoming.id),
+        "kind": incoming.kind.value,
+        "segment_key": incoming.segment_key,
+        "reason": reason,
+    }
+    if extra:
+        row.update(extra)
+    audit.append(row)
+
+
 async def _apply_one_report(
     session: AsyncSession,
     incoming: ReportItem,
     gateway_id: UUID,
+    audit: list[dict[str, Any]],
 ) -> int:
     """Returns number of rows touched (0 or 1)."""
     kind = incoming.kind.value
@@ -110,7 +143,9 @@ async def _apply_one_report(
         existing = _snap_mutable(row) if row is not None and row.kind == "sos" else None
         action = decide_sos_merge(existing_row=existing)
         if action == SosMergeAction.noop:
+            _append_merge_audit(audit, incoming=incoming, reason="noop_sos_immutable")
             return 0
+        seq = await next_server_sequence(session)
         session.add(
             Report(
                 id=incoming.id,
@@ -122,11 +157,12 @@ async def _apply_one_report(
                 updated_at=incoming.updated_at,
                 source_gateway_id=gateway_id,
                 deleted_at=None,
+                server_sequence_id=seq,
+                is_tombstone=False,
             )
         )
         return 1
 
-    # Road / supply — mutable, segment merge when segment_key is present.
     if incoming.segment_key:
         row = await _fetch_canonical_mutable(session, kind, incoming.segment_key)
     else:
@@ -144,9 +180,19 @@ async def _apply_one_report(
     )
 
     if decision.action == MutableMergeAction.noop:
+        if snap and snap.get("is_tombstone") and not incoming_is_tombstone(incoming):
+            _append_merge_audit(
+                audit,
+                incoming=incoming,
+                reason="noop_tombstone_blocks_resurrection",
+                extra={"canonical_sequence_id": snap.get("server_sequence_id")},
+            )
+        else:
+            _append_merge_audit(audit, incoming=incoming, reason="noop_lww_loser")
         return 0
 
     if decision.action == MutableMergeAction.insert:
+        seq = await next_server_sequence(session)
         session.add(
             Report(
                 id=decision.row_id,
@@ -158,10 +204,13 @@ async def _apply_one_report(
                 updated_at=decision.updated_at,
                 source_gateway_id=gateway_id,
                 deleted_at=decision.deleted_at,
+                server_sequence_id=seq,
+                is_tombstone=decision.is_tombstone,
             )
         )
         return 1
 
+    seq = await next_server_sequence(session)
     await session.execute(
         update(Report)
         .where(Report.id == decision.row_id)
@@ -174,13 +223,15 @@ async def _apply_one_report(
             updated_at=decision.updated_at,
             source_gateway_id=gateway_id,
             deleted_at=decision.deleted_at,
+            server_sequence_id=seq,
+            is_tombstone=decision.is_tombstone,
         )
     )
     return 1
 
 
 class MergeService:
-    """Merge entrypoint (Issue #2)."""
+    """Merge entrypoint (Issue #2 + #5 + #8)."""
 
     @staticmethod
     async def apply_batch(
@@ -197,7 +248,7 @@ class MergeService:
         settings = get_settings()
         max_items = settings.max_sync_batch_items
         if len(body.reports) > max_items:
-            raise BatchValidationError(f"batch exceeds max_sync_batch_items ({max_items})")
+            raise BatchPayloadTooLargeError(f"batch exceeds max_sync_batch_items ({max_items})")
 
         now = _utcnow()
         max_future = timedelta(seconds=settings.max_future_skew_seconds)
@@ -218,27 +269,36 @@ class MergeService:
             )
 
         gateway_name = body.gateway_name or f"gateway-{str(body.gateway_id)[:8]}"
-        await session.execute(
-            pg_insert(Gateway)
-            .values(
-                id=body.gateway_id,
-                name=gateway_name,
-                last_seen_at=now,
+        if settings.require_gateway_auth:
+            await session.execute(
+                update(Gateway)
+                .where(Gateway.id == body.gateway_id)
+                .values(last_seen_at=now, name=gateway_name)
             )
-            .on_conflict_do_update(
-                index_elements=[Gateway.id],
-                set_={"last_seen_at": now, "name": gateway_name},
+        else:
+            await session.execute(
+                pg_insert(Gateway)
+                .values(
+                    id=body.gateway_id,
+                    name=gateway_name,
+                    last_seen_at=now,
+                )
+                .on_conflict_do_update(
+                    index_elements=[Gateway.id],
+                    set_={"last_seen_at": now, "name": gateway_name},
+                )
             )
-        )
 
+        audit: list[dict[str, Any]] = []
         touches = 0
         for item in body.reports:
-            touches += await _apply_one_report(session, item, body.gateway_id)
+            touches += await _apply_one_report(session, item, body.gateway_id, audit)
             await session.flush()
             if _simulated_fault_after_touches is not None and touches >= _simulated_fault_after_touches:
                 raise SimulatedMergeFault("simulated merge fault for tests")
 
         record_count = len(body.reports)
+        batch_seq = await next_server_sequence(session)
         session.add(
             SyncLog(
                 gateway_id=body.gateway_id,
@@ -247,6 +307,8 @@ class MergeService:
                 applied_count=touches,
                 status="applied",
                 error_detail=None,
+                server_sequence_id=batch_seq,
+                merge_audit={"events": audit} if audit else None,
             )
         )
 

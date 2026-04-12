@@ -3,8 +3,10 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from typing import Any
+
 from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -26,5 +28,7 @@ class SyncLog(Base):
     applied_count: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    server_sequence_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True)
+    merge_audit: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     gateway: Mapped["Gateway"] = relationship(back_populates="sync_logs")

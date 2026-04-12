@@ -22,7 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import ModelArtifact
+from app.deps.gateway_auth import require_gateway_for_models
+from app.models import Gateway, ModelArtifact
 from app.schemas.models import ModelLatestResponse
 from app.services.model_paths import resolve_under_base
 from app.services.model_publish import publish_new_latest
@@ -50,7 +51,12 @@ def _require_admin_key(x_models_admin_key: str | None) -> None:
 
 
 @router.get("/{name}/latest", response_model=ModelLatestResponse)
-async def get_model_latest(name: str, session: AsyncSession = Depends(get_db)) -> ModelLatestResponse:
+async def get_model_latest(
+    name: str,
+    session: AsyncSession = Depends(get_db),
+    _gateway: Gateway | None = Depends(require_gateway_for_models),
+) -> ModelLatestResponse:
+    _ = _gateway
     if not _SLUG.match(name):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid model name")
     row = await session.scalar(
@@ -72,8 +78,10 @@ async def download_model_latest(
     name: str,
     request: Request,
     session: AsyncSession = Depends(get_db),
+    _gateway: Gateway | None = Depends(require_gateway_for_models),
     x_model_download_key: Annotated[str | None, Header(alias="X-Model-Download-Key")] = None,
 ) -> FileResponse | Response:
+    _ = _gateway
     _require_download_key(x_model_download_key)
     if not _SLUG.match(name):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid model name")

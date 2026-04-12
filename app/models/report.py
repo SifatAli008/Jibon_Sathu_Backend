@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,5 +31,7 @@ class Report(Base):
         UUID(as_uuid=True), ForeignKey("gateways.id", ondelete="SET NULL"), nullable=True, index=True
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    server_sequence_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True, index=True)
+    is_tombstone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     gateway: Mapped["Gateway | None"] = relationship(back_populates="reports")
