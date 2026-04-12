@@ -16,6 +16,7 @@ from app.services.merge_service import (
     BatchValidationError,
     SimulatedMergeFault,
 )
+from app.services.triage_enqueue import maybe_enqueue_triage
 from app.services.sync_push import process_sync_push
 from app.services.sync_pull import build_sync_pull_response
 
@@ -34,7 +35,9 @@ async def sync_push(
     _ = request
     try:
         async with session.begin():
-            return await process_sync_push(session, body, gateway_id, x_sync_batch_id)
+            resp, triage_ids = await process_sync_push(session, body, gateway_id, x_sync_batch_id)
+        maybe_enqueue_triage(triage_ids)
+        return resp
     except BatchPayloadTooLargeError as e:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(e)) from e
     except BatchValidationError as e:

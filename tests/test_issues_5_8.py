@@ -115,8 +115,17 @@ async def test_push_delete_creates_tombstone(ac: AsyncClient, monkeypatch: pytes
 
         lr = await ac.get("/reports", headers={"X-Dev-Reports-Key": "dev-test-key"})
         row = next(x for x in lr.json() if x.get("segment_key") == seg)
-        # Dev endpoint may not expose is_tombstone; validate via pull instead:
-        pr = await ac.get("/v1/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": 0})
+        # Pull orders by ascending server_sequence_id; new rows are not on the first page when
+        # the DB already has many reports — resolve sequence from DB then pull a tight window.
+        factory = get_session_factory()
+        async with factory() as session:
+            seq = await session.scalar(select(Report.server_sequence_id).where(Report.segment_key == seg))
+        assert seq is not None
+        pr = await ac.get(
+            "/v1/sync/pull",
+            headers={"X-Gateway-Id": str(gid)},
+            params={"since_sequence_id": int(seq) - 1, "limit": 50},
+        )
         assert pr.status_code == 200
         items = pr.json()["items"]
         hit = next(x for x in items if x.get("segment_key") == seg)
@@ -239,14 +248,26 @@ async def test_pull_delta_respects_since_sequence_id(ac: AsyncClient) -> None:
         )
     ).status_code == 200
 
-    r0 = await ac.get("/v1/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": 0})
+    factory = get_session_factory()
+    async with factory() as session:
+        seq = await session.scalar(select(Report.server_sequence_id).where(Report.id == rid))
+    assert seq is not None
+
+    r0 = await ac.get(
+        "/v1/sync/pull",
+        headers={"X-Gateway-Id": str(gid)},
+        params={"since_sequence_id": int(seq) - 1, "limit": 20},
+    )
     assert r0.status_code == 200
     j0 = r0.json()
-    assert j0["has_more"] is False
-    assert j0["max_sequence_id"] > 0
-    mx = j0["max_sequence_id"]
+    assert any(x.get("segment_key") == seg for x in j0["items"])
+    assert j0["max_sequence_id"] >= int(seq)
 
-    r1 = await ac.get("/v1/sync/pull", headers={"X-Gateway-Id": str(gid)}, params={"since_sequence_id": mx})
+    r1 = await ac.get(
+        "/v1/sync/pull",
+        headers={"X-Gateway-Id": str(gid)},
+        params={"since_sequence_id": int(seq), "limit": 20},
+    )
     assert r1.status_code == 200
     assert r1.json()["items"] == []
 

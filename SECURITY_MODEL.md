@@ -46,3 +46,11 @@ If you need overlap (two valid secrets), extend the schema (e.g., `auth_secret_h
 ## Public keys
 
 `gateways.public_key` remains available for future asymmetric schemes (e.g., signed payloads). The baseline implementation uses **shared-secret bearer tokens** for simplicity in intermittent networks.
+
+## Dashboard admin (Issue #13)
+
+When **`DASHBOARD_ADMIN_KEY`** is set in the server environment, **`GET /v1/analytics/*`** requires header **`X-Dashboard-Admin-Key`** with the same value. If the key is unset, the analytics routes are **disabled** (same pattern as other dev/admin endpoints).
+
+## gRPC client version (Issue #12)
+
+gRPC calls to **`SyncIngest.PushBatch`** must include **`x-client-version`** or **`x-gateway-version`** metadata (semver). The server rejects requests below **`GRPC_MIN_CLIENT_VERSION`** (default **`1.0.0`**) with **FAILED_PRECONDITION**. This is independent of gateway bearer auth; it guards field clients against incompatible server builds.

@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package jibon.sync.v1;
+
+// Issue #12 — gRPC bridge (batch ingest mirrors REST /v1/sync/push).
+
+message ReportItem {
+  string id = 1;
+  string kind = 2;
+  string segment_key = 3;
+  string status = 4;
+  string payload_json = 5;
+  string created_at_rfc3339 = 6;
+  string updated_at_rfc3339 = 7;
+  optional string deleted_at_rfc3339 = 8;
+  optional bool is_tombstone = 9;
+}
+
+message PushBatchRequest {
+  string gateway_id = 1;
+  string batch_id = 2;
+  optional string gateway_name = 3;
+  repeated ReportItem reports = 4;
+}
+
+message PushBatchResponse {
+  bool idempotent_replay = 1;
+  int32 record_count = 2;
+  int32 applied_count = 3;
+  string sync_log_status = 4;
+}
+
+service SyncIngest {
+  rpc PushBatch(PushBatchRequest) returns (PushBatchResponse);
+}

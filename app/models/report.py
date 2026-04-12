@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, String, Text, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,5 +33,7 @@ class Report(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     server_sequence_id: Mapped[int] = mapped_column(BigInteger, nullable=False, unique=True, index=True)
     is_tombstone: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    triage_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    priority_score: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
 
     gateway: Mapped["Gateway | None"] = relationship(back_populates="reports")

@@ -1,4 +1,4 @@
-# Cloud API contract (Issues #1–#10)
+# Cloud API contract (Issues #1–#13)
 
 Base URL: deployment-specific. Local default: `http://127.0.0.1:8000`.
 
@@ -315,6 +315,40 @@ With Postgres running and migrations applied:
 ```bash
 pytest tests/test_models_onnx.py -q
 ```
+
+---
+
+## Dashboard analytics (Issue #13)
+
+**Purpose:** Read-heavy JSON for the React dashboard (map layers, SOS queue). Same merge and sync rules as **`POST /v1/sync/push`** apply to ingest; analytics are **read-only** aggregates.
+
+### Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Dashboard-Admin-Key` | yes (when enabled) | Must match `DASHBOARD_ADMIN_KEY`. If unset, routes return **404** (disabled). |
+
+### `GET /v1/analytics/map-layers`
+
+Returns a **GeoJSON-like** `FeatureCollection` (see `app/services/analytics_service.py`): points for non-tombstone `road` / `supply` rows that include `lat` / `lon` in `payload`, ordered by `server_sequence_id` (capped server-side).
+
+### `GET /v1/analytics/sos-queue`
+
+Returns a JSON array of open SOS-style rows, ordered by `priority_score` then `server_sequence_id`.
+
+---
+
+## gRPC `SyncIngest` (Issue #12)
+
+**Purpose:** Same batch ingest semantics as **`POST /v1/sync/push`** via **`jibon.sync.v1.SyncIngest/PushBatch`** (see `protos/sync.proto`). Uses **`MergeService.apply_batch`** with `gateway_id` and `batch_id` from the protobuf request.
+
+### Metadata
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `x-client-version` or `x-gateway-version` | yes | Semver string; must be **≥** `GRPC_MIN_CLIENT_VERSION` (default `1.0.0`). |
+
+**FAILED_PRECONDITION** when the version is missing or too low.
 
 ---
 

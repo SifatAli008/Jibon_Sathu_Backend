@@ -8,12 +8,17 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.api.routes import api_router
 from app.db import dispose_db_engine
+from app.grpc_service.server import start_grpc_server
 from app.limits import limiter
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI):
+async def lifespan(app: FastAPI):
+    grpc_server = await start_grpc_server()
+    app.state.grpc_server = grpc_server
     yield
+    if grpc_server is not None:
+        await grpc_server.stop(grace=5.0)
     await dispose_db_engine()
 
 

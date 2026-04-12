@@ -19,12 +19,13 @@ async def process_sync_push(
     body: SyncPushRequest,
     header_gateway_id: UUID,
     header_batch_id: UUID,
-) -> SyncPushResponse:
+) -> tuple[SyncPushResponse, tuple[UUID, ...]]:
     result = await MergeService.apply_batch(session, body, header_gateway_id, header_batch_id)
-    return SyncPushResponse(
+    resp = SyncPushResponse(
         idempotent_replay=result.idempotent_replay,
         record_count=result.record_count,
         applied_count=result.applied_count,
         rejected=[],
         sync_log_status=result.sync_log_status,
     )
+    return resp, result.triage_report_ids

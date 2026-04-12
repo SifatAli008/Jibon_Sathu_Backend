@@ -58,6 +58,8 @@ class MergeResult:
     record_count: int
     applied_count: int
     sync_log_status: str
+    """Report PKs touched by merge (insert/update) for async M6 triage (Issue #11)."""
+    triage_report_ids: tuple[UUID, ...] = ()
 
 
 def _utcnow() -> datetime:
@@ -130,8 +132,8 @@ async def _apply_one_report(
     incoming: ReportItem,
     gateway_id: UUID,
     audit: list[dict[str, Any]],
-) -> int:
-    """Returns number of rows touched (0 or 1)."""
+) -> tuple[int, UUID | None]:
+    """Returns (rows touched 0|1, affected report PK for triage enqueue)."""
     kind = incoming.kind.value
 
     if incoming.kind == ReportKind.sos:
@@ -144,7 +146,7 @@ async def _apply_one_report(
         action = decide_sos_merge(existing_row=existing)
         if action == SosMergeAction.noop:
             _append_merge_audit(audit, incoming=incoming, reason="noop_sos_immutable")
-            return 0
+            return (0, None)
         seq = await next_server_sequence(session)
         session.add(
             Report(
@@ -159,9 +161,10 @@ async def _apply_one_report(
                 deleted_at=None,
                 server_sequence_id=seq,
                 is_tombstone=False,
+                triage_status="pending",
             )
         )
-        return 1
+        return (1, incoming.id)
 
     if incoming.segment_key:
         row = await _fetch_canonical_mutable(session, kind, incoming.segment_key)
@@ -189,7 +192,7 @@ async def _apply_one_report(
             )
         else:
             _append_merge_audit(audit, incoming=incoming, reason="noop_lww_loser")
-        return 0
+        return (0, None)
 
     if decision.action == MutableMergeAction.insert:
         seq = await next_server_sequence(session)
@@ -206,9 +209,10 @@ async def _apply_one_report(
                 deleted_at=decision.deleted_at,
                 server_sequence_id=seq,
                 is_tombstone=decision.is_tombstone,
+                triage_status="pending",
             )
         )
-        return 1
+        return (1, decision.row_id)
 
     seq = await next_server_sequence(session)
     await session.execute(
@@ -225,9 +229,11 @@ async def _apply_one_report(
             deleted_at=decision.deleted_at,
             server_sequence_id=seq,
             is_tombstone=decision.is_tombstone,
+            triage_status="pending",
+            priority_score=None,
         )
     )
-    return 1
+    return (1, decision.row_id)
 
 
 class MergeService:
@@ -266,6 +272,7 @@ class MergeService:
                 record_count=existing.record_count,
                 applied_count=existing.applied_count,
                 sync_log_status=existing.status,
+                triage_report_ids=(),
             )
 
         gateway_name = body.gateway_name or f"gateway-{str(body.gateway_id)[:8]}"
@@ -291,8 +298,12 @@ class MergeService:
 
         audit: list[dict[str, Any]] = []
         touches = 0
+        triage_ids: list[UUID] = []
         for item in body.reports:
-            touches += await _apply_one_report(session, item, body.gateway_id, audit)
+            n, rid = await _apply_one_report(session, item, body.gateway_id, audit)
+            touches += n
+            if rid is not None:
+                triage_ids.append(rid)
             await session.flush()
             if _simulated_fault_after_touches is not None and touches >= _simulated_fault_after_touches:
                 raise SimulatedMergeFault("simulated merge fault for tests")
@@ -317,4 +328,5 @@ class MergeService:
             record_count=record_count,
             applied_count=touches,
             sync_log_status="applied",
+            triage_report_ids=tuple(triage_ids),
         )

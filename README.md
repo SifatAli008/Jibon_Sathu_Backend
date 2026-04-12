@@ -31,6 +31,9 @@ With Postgres running and `DATABASE_URL` set (see `.env.example`):
 pytest
 # ONNX + compatibility metadata (Issue #9) — requires dev ML stack:
 pytest tests/test_models_onnx.py -q
+# Optional analytics load check (Issue #13) — seeds 10k rows; requires Postgres:
+# set RUN_ANALYTICS_LOAD_TEST=1
+# pytest tests/test_analytics_load.py -q
 ```
 
 API tests use `httpx.AsyncClient` (async) so the same event loop owns asyncpg for the whole test. For local verification of merge behavior, set `REPORTS_DEV_KEY` and call `GET /reports` with header `X-Dev-Reports-Key` (see `API_SPEC.md`).
@@ -81,3 +84,25 @@ python tools/gateway_sim.py --base-url http://127.0.0.1:8000 --repeat-idempotent
 Optional env vars: `GATEWAY_SIM_GATEWAY_ID`, `GATEWAY_SIM_MODEL_NAME` (default `road_decay_model`), `GATEWAY_SIM_DOWNLOAD_KEY`, `GATEWAY_SIM_REPORTS_KEY` (for `GET /reports` when `REPORTS_DEV_KEY` is set on the server). CLI: `--sleep-ms`, `--sleep-before-push-ms`, `--no-verify-tls`, `--timeout`.
 
 Artifacts: [docs/gateway-spike-sequence.md](docs/gateway-spike-sequence.md), [docs/gateway-spike-network-notes.md](docs/gateway-spike-network-notes.md), [docs/samples/gateway-spike-run.txt](docs/samples/gateway-spike-run.txt), [report/issue-04-implementation-report.md](report/issue-04-implementation-report.md).
+
+## Background triage (Issue #11)
+
+Merge commits stay fast: **`POST /v1/sync/push`** enqueues **`triage_reports_task`** after the transaction commits. Workers run **`app.tasks.triage`** against Postgres (sync URL) and update `reports.triage_status` / `priority_score`.
+
+- **Docker:** `docker compose` includes **Redis** on the internal network (and maps host `6379` if you use the published port).
+- **Env:** `CELERY_BROKER_URL` (and optional `CELERY_RESULT_BACKEND`). For local tests without Redis, set **`CELERY_TASK_ALWAYS_EAGER=true`** (the app uses an in-memory Celery broker/backend so `pytest` does not require Redis).
+- **Run worker:** `celery -A app.worker worker -l info` (same Python env and `DATABASE_URL` / sync URL as the API).
+
+## gRPC ingest (Issue #12)
+
+**`SyncIngest.PushBatch`** mirrors **`POST /v1/sync/push`** (same `MergeService` rules). Proto: `protos/sync.proto`; regenerate stubs with `python scripts/gen_grpc_stubs.py`.
+
+- **Env:** `GRPC_PORT` (default **50051**; set **`0`** to disable the in-process server). Clients must send **`x-client-version`** (or `x-gateway-version`) metadata ≥ **`GRPC_MIN_CLIENT_VERSION`** (default `1.0.0`).
+
+## Dashboard analytics (Issue #13)
+
+**`GET /v1/analytics/map-layers`** (GeoJSON-style) and **`GET /v1/analytics/sos-queue`** power the React dashboard. When **`DASHBOARD_ADMIN_KEY`** is set, send **`X-Dashboard-Admin-Key`**. Optional Redis caching uses the same URL as **`CELERY_BROKER_URL`** (`ANALYTICS_CACHE_TTL_SECONDS`).
+
+**CORS:** `app/main.py` allows common dev origins for the React app; tighten for production.
+
+See `API_SPEC.md` and `SECURITY_MODEL.md`.
