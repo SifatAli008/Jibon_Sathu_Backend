@@ -1,4 +1,4 @@
-# Cloud API contract (Issue #1)
+# Cloud API contract (Issues #1–#2)
 
 Base URL: deployment-specific. Local default: `http://127.0.0.1:8000`.
 
@@ -32,9 +32,42 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 
 ---
 
+## `GET /reports` (dev only)
+
+**Purpose:** Minimal read-back for integration tests and Issue #4 spikes. **Disabled** unless `REPORTS_DEV_KEY` is set in the server environment.
+
+### Headers
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-Dev-Reports-Key` | yes | Must equal `REPORTS_DEV_KEY`. |
+
+### Response
+
+**200 OK** — JSON array of reports (most recently `updated_at` first), capped by `limit` (default 200, max 500).
+
+**404 Not Found** — `REPORTS_DEV_KEY` is unset (endpoint treated as absent).
+
+**401 Unauthorized** — header missing or wrong.
+
+---
+
 ## `POST /sync/push`
 
-**Purpose:** Batch ingest of `reports` from a field gateway. Issue #1 behavior: validate payload, transactional upsert **by report `id`**, append `sync_logs` row, enforce idempotency on `(gateway_id, batch_id)`.
+**Purpose:** Batch ingest with **Issue #2 merge policy** inside one database transaction: idempotent batches, deterministic road/supply merge, append-only SOS, strict validation.
+
+### Merge summary
+
+| `kind` | Behavior |
+|--------|----------|
+| `road`, `supply` | If `segment_key` is set: one canonical row per `(kind, segment_key)`; **latest `updated_at` wins**. Winner **replaces** `status`, `payload`, `created_at`, `updated_at`, `deleted_at`, `source_gateway_id` on the **survivor row’s primary key** (first writer’s `id` may remain while later gateways send different report `id`s). If `segment_key` is absent: same last-write-wins rules keyed by existing row `id`. |
+| `sos` | **Append-only:** first successful insert for an `id` wins; later pushes with the same `id` are **no-ops** (payload not updated). SOS rows are **not** `UPDATE`d or `DELETE`d on push. `deleted_at` from the client is ignored for SOS inserts. |
+
+**Tie-break** (same `updated_at` on incoming vs existing row): lexicographic compare `(str(source_gateway_id), str(report_id))` — **larger** tuple wins so outcomes are stable.
+
+**Strict batch (Issue #2):** If **any** report fails validation (clock skew, id/kind conflict, batch size), the **entire** batch fails with **422** and **nothing** from that request is committed (including `sync_logs`).
+
+**Batch size:** At most `MAX_SYNC_BATCH_ITEMS` reports per request (default **10000**).
 
 ### Headers (required)
 
@@ -76,16 +109,16 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 
 | Field | Required | Notes |
 |-------|----------|--------|
-| `id` | yes | UUID. Primary upsert key in Issue #1. |
+| `id` | yes | UUID. For SOS, stable id for idempotency. For road/supply with `segment_key`, may differ from the canonical row `id` after cross-gateway merge. |
 | `kind` | yes | Closed set: `road`, `sos`, `supply`. |
-| `segment_key` | no | Text, merge hint for Issue #2. |
+| `segment_key` | no | For `road` / `supply`, preferred natural merge key when present. |
 | `status` | no | Defaults to empty string. |
 | `payload` | no | JSON object; defaults `{}`. |
 | `created_at` | yes | `timestamptz` |
 | `updated_at` | yes | `timestamptz` |
-| `deleted_at` | no | Soft delete timestamp when set. |
+| `deleted_at` | no | For `road` / `supply`, applied when the incoming row wins; ignored for SOS. |
 
-**Clock skew:** If `created_at` or `updated_at` is more than `MAX_FUTURE_SKEW_SECONDS` (default **300**) ahead of the server UTC clock, that report is **rejected** for the batch (not written). Other valid rows in the same batch are still applied; the batch `sync_logs.status` becomes `partial` when any row is rejected.
+**Clock skew:** If **any** report has `created_at` or `updated_at` more than `MAX_FUTURE_SKEW_SECONDS` (default **300**) ahead of server UTC, the **whole batch** returns **422** (strict mode).
 
 ### Response
 
@@ -104,17 +137,17 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 | Field | Description |
 |-------|-------------|
 | `idempotent_replay` | `true` if this `(gateway_id, batch_id)` was already processed; no duplicate writes. |
-| `record_count` | Number of report objects in the request body (including rejected). |
-| `applied_count` | Rows successfully upserted in this response (0 on idempotent replay of a prior success). |
-| `rejected` | List of `{ "id": "<uuid string>", "reason": "<message>" }` for clock-skew rejects. |
-| `sync_log_status` | `applied`, `partial`, or replayed status from stored `sync_logs` row. |
+| `record_count` | Number of report objects in the request body. |
+| `applied_count` | Number of **rows inserted or updated** after merge (SOS duplicate / road loser → 0 touches for that item). |
+| `rejected` | Reserved; always `[]` on **200** under strict validation. |
+| `sync_log_status` | `applied` on success, or stored status on idempotent replay. |
 
 ### Error responses
 
 | Code | When |
 |------|------|
 | `400 Bad Request` | `gateway_id` / `batch_id` disagree with headers. |
-| `422 Unprocessable Entity` | Pydantic validation (unknown `kind`, malformed UUID/timestamp, extra keys, etc.). |
+| `422 Unprocessable Entity` | Pydantic validation, strict batch validation (clock skew, kind/id conflict, batch too large), etc. |
 | `500 Internal Server Error` | Unexpected persistence or server faults (not part of the stable contract). |
 
 ---
@@ -127,4 +160,4 @@ All JSON bodies use UTF-8. Timestamps are ISO 8601 with timezone (RFC 3339), pre
 
 ## Versioning
 
-Issue #1 ships under path prefix `/sync` for push. Global API version header or URL prefix may be introduced later; Zone B clients should pin to this document revision in their repository.
+Push lives under `/sync`. Global API version header or URL prefix may be introduced later; Zone B clients should pin to this document revision in their repository.

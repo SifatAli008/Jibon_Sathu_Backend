@@ -39,3 +39,12 @@ async def ping_db() -> bool:
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     return True
+
+
+async def dispose_db_engine() -> None:
+    """Close pool and drop cached engine (e.g. between Starlette TestClient runs / event loops)."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None

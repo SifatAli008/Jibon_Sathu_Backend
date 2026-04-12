@@ -30,3 +30,5 @@ With Postgres running and `DATABASE_URL` set (see `.env.example`):
 ```bash
 pytest
 ```
+
+API tests use `httpx.AsyncClient` (async) so the same event loop owns asyncpg for the whole test. For local verification of merge behavior, set `REPORTS_DEV_KEY` and call `GET /reports` with header `X-Dev-Reports-Key` (see `API_SPEC.md`).
