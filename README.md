@@ -53,3 +53,18 @@ The script prints `sha256`, `suggested_version`, and `size_bytes`.
 **Optional auth:** set `MODELS_DOWNLOAD_KEY` to require header `X-Model-Download-Key` on **file** download only. Set `MODELS_ADMIN_KEY` and use header `X-Models-Admin-Key` on **`POST /models/{name}/publish`** (multipart: `version`, `file`) for in-band publishing without the CLI.
 
 **Ops:** The API process does not cache file contents; new publishes are visible immediately. Back up `MODEL_ARTIFACTS_BASE_DIR` and the database together when promoting releases.
+
+## Gateway integration spike (Issue #4)
+
+End-to-end rehearsal (push overlapping reports → optional dev `GET /reports` → model metadata → download → SHA256 + onnxruntime):
+
+```bash
+# Terminal A: API + Postgres (see Quick start). Publish a model first (Issue #3).
+# Terminal B:
+pip install -e ".[dev]"
+python tools/gateway_sim.py --base-url http://127.0.0.1:8000 --repeat-idempotent-push
+```
+
+Optional env vars: `GATEWAY_SIM_GATEWAY_ID`, `GATEWAY_SIM_MODEL_NAME` (default `road_decay_model`), `GATEWAY_SIM_DOWNLOAD_KEY`, `GATEWAY_SIM_REPORTS_KEY` (for `GET /reports` when `REPORTS_DEV_KEY` is set on the server). CLI: `--sleep-ms`, `--sleep-before-push-ms`, `--no-verify-tls`, `--timeout`.
+
+Artifacts: [docs/gateway-spike-sequence.md](docs/gateway-spike-sequence.md), [docs/gateway-spike-network-notes.md](docs/gateway-spike-network-notes.md), [docs/samples/gateway-spike-run.txt](docs/samples/gateway-spike-run.txt), [report/issue-04-implementation-report.md](report/issue-04-implementation-report.md).

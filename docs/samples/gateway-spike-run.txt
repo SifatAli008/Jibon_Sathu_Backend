@@ -1,0 +1,20 @@
+# Example gateway_sim output (sanitized) — Issue #4
+# Command:
+#   set GATEWAY_SIM_REPORTS_KEY=***   (optional, if GET /reports enabled on server)
+#   set GATEWAY_SIM_DOWNLOAD_KEY=*** (optional, if MODELS_DOWNLOAD_KEY set on server)
+#   python tools/gateway_sim.py --base-url http://127.0.0.1:8000 --repeat-idempotent-push
+
+2026-04-12T11:00:01Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 gateway_id=550e8400-e29b-41d4-a716-446655440000 base_url=http://127.0.0.1:8000
+2026-04-12T11:00:01Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 POST /sync/push reports=10
+2026-04-12T11:00:01Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 push ok idempotent_replay=False record_count=10 applied_count=9 sync_log_status=applied
+2026-04-12T11:00:01Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 repeating identical POST (idempotency check)
+2026-04-12T11:00:01Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 idempotent replay confirmed
+2026-04-12T11:00:01Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 GET /reports (dev)
+2026-04-12T11:00:01Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 spike-related report rows=5
+2026-04-12T11:00:01Z INFO batch_id=... segment=SPIKE-OVERLAP-A status=second_should_win id=... updated_at=...
+2026-04-12T11:00:02Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 GET /models/road_decay_model/latest
+2026-04-12T11:00:02Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 model name=road_decay_model version=2026.04.12-1 sha256=<64-hex> size_bytes=12345
+2026-04-12T11:00:02Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 GET /models/road_decay_model/latest/file -> temp file
+2026-04-12T11:00:02Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 downloaded bytes sha256 matches metadata
+2026-04-12T11:00:03Z INFO onnxruntime smoke ok output_len=1
+2026-04-12T11:00:03Z INFO batch_id=6ba7b810-9dad-11d1-80b4-000000000001 spike completed successfully
