@@ -2,6 +2,8 @@
 
 Zone A (cloud) FastAPI service: Postgres schema, health check, and **`POST /v1/sync/push`** (frozen v1 contract).
 
+**Local run + client integration:** [docs/startup-guide.md](docs/startup-guide.md) · **HTTP route list:** [docs/api-endpoints.md](docs/api-endpoints.md)
+
 ## Quick start
 
 1. Start Postgres: `docker compose up -d` (published on host **`127.0.0.1:5433`** — see `docker-compose.yml`).
