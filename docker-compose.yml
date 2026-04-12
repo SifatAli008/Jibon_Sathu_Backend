@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jibon
+      POSTGRES_PASSWORD: jibon
+      POSTGRES_DB: jibon_sathu
+    # Host 5433 avoids clashing with a local PostgreSQL install on 5432 (common on dev PCs).
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jibon -d jibon_sathu"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
