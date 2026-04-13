@@ -62,6 +62,8 @@ Recommended when integrating real clients:
 | `CELERY_BROKER_URL` | `redis://127.0.0.1:6379/0` — enables async triage after sync (start a worker; see below). |
 | `GRPC_PORT` | `50051` — enable gRPC for Flutter; use `0` to disable. |
 | `DASHBOARD_ADMIN_KEY` | Shared secret; React sends `X-Dashboard-Admin-Key` for `/v1/analytics/*`. |
+| `REPORTS_DEV_KEY` | Enables `GET /reports` (dev); React uses `VITE_DEV_REPORTS_KEY` for field devices + recent activity. |
+| `SYNC_ADMIN_KEY` | Enables `GET /v1/sync/conflicts`; React uses `VITE_SYNC_ADMIN_KEY` for sync history. |
 | `REQUIRE_GATEWAY_AUTH` | Leave `false` for quick local tests; set `true` in production and provision gateways (see `SECURITY_MODEL.md`). |
 
 Details for all keys: `.env.example`, `SECURITY_MODEL.md`, and [api-endpoints.md](api-endpoints.md).
@@ -133,9 +135,23 @@ For **tests only**, you can use `CELERY_TASK_ALWAYS_EAGER=true` (no Redis); do n
 
 ## 8. Connecting the React dashboard
 
+The repo includes a **Vite + React** app under **`dashboard/`** (shadcn/ui, Bangladesh-inspired theme). From that folder: `npm install`, copy **`dashboard/.env.example`** to **`.env.local`**, then `npm run dev` (default port **5173**).
+
 - **CORS** — `app/main.py` allows broad origins in development (`allow_origins=["*"]`). Tighten for production.
 - **Analytics** — Set `DASHBOARD_ADMIN_KEY` in `.env`, restart the API, and send the same value in header **`X-Dashboard-Admin-Key`** on `GET /v1/analytics/map-layers` and `GET /v1/analytics/sos-queue`.
+- **Field devices / recent activity** — Set `REPORTS_DEV_KEY` in the API `.env`. In the React app (for example `.env.local`), set **`VITE_DEV_REPORTS_KEY`** to the **same** string so the UI can call `GET /reports` (includes `source_gateway_id` per row).
+- **Sync history** — Set **`SYNC_ADMIN_KEY`** on the API and **`VITE_SYNC_ADMIN_KEY`** in the React app to the same value for `GET /v1/sync/conflicts` (sync batches / status).
+- **Demo data** — Run `python scripts/seed_dashboard_demo.py` after the API is up; it posts several batches so multiple gateways and sync log rows appear when the keys above are set.
 - **Dev server** — Typical React port `3000` works with the current CORS settings.
+
+Example React `.env.local` (values must match the API `.env`):
+
+```text
+VITE_API_URL=http://127.0.0.1:8000
+VITE_DASHBOARD_ADMIN_KEY=local-dev-dashboard-key
+VITE_DEV_REPORTS_KEY=local-dev-reports-key
+VITE_SYNC_ADMIN_KEY=local-dev-sync-admin-key
+```
 
 ---
 
@@ -147,7 +163,25 @@ For **tests only**, you can use `CELERY_TASK_ALWAYS_EAGER=true` (no Redis); do n
 | Flutter cannot reach API | Firewall, `--host 0.0.0.0`, correct LAN IP (not `127.0.0.1` from a phone). |
 | `404` on `/v1/sync/*` | Use **`/v1/`** prefix; unversioned `/sync/*` is not mounted. |
 | Analytics `404` | `DASHBOARD_ADMIN_KEY` unset (analytics disabled by design). |
+| Field devices / activity empty | `REPORTS_DEV_KEY` unset on API, or React `VITE_DEV_REPORTS_KEY` mismatch; restart API after `.env` changes. |
+| Sync history “admin key not configured” | `SYNC_ADMIN_KEY` unset on API, or `VITE_SYNC_ADMIN_KEY` mismatch in the React app. |
 | gRPC connection refused | `GRPC_PORT` not `0`; port 50051 not blocked; client targets correct host/port. |
+
+---
+
+## 10. Load testing (k6)
+
+Install [k6](https://k6.io/docs/get-started/installation/) (`winget install GrafanaLabs.k6` on Windows). If `k6` is not found, **restart the terminal** so `PATH` updates, or run **`.\scripts\k6.ps1`** from the repo root (see **`k6/README.md`**).
+
+With the API running:
+
+```bash
+k6 run k6/health.js
+k6 run k6/sync-push.js
+k6 run -e DASHBOARD_ADMIN_KEY=<your-key> k6/analytics.js
+```
+
+See **`k6/README.md`** for `BASE_URL`, rate-limit notes, and CI export options.
 
 ---
 
