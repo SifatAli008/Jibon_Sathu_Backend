@@ -1,6 +1,6 @@
 # Zone A API — endpoint reference
 
-Base URL (local): `http://127.0.0.1:8000` — replace with your host and scheme (`https://` behind a reverse proxy) in production.
+Base URL (local): `http://127.0.0.1:8000` — replace with your host and scheme (`https://` behind a reverse proxy) in production. If you run with `--host 0.0.0.0 --port 8000`, phones and other PCs on the same LAN should call `http://<this-server's-LAN-IP>:8000` (not `127.0.0.1`, which always means “this device only”).
 
 All **sync** and **model** HTTP routes are under **`/v1/`**. **`GET /health`** and dev **`GET /reports`** are at the **root** (no `/v1` prefix).
 
